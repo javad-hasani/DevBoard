@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useTheme } from "next-themes";
 import Image from "next/image";
 import { Activity, ArrowUpRight, Check, Code2, Download, FileSpreadsheet, GitCommitHorizontal, GitCompareArrows, GitFork, GitPullRequest, Github, Languages, LoaderCircle, Menu, Moon, Search, ShieldCheck, Sparkles, Star, Sun, X } from "lucide-react";
@@ -63,7 +63,7 @@ export const Dashboard = () => {
   const [locale, setLocale] = useState<Locale>("fa");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [username, setUsername] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [menu, setMenu] = useState(false);
   const [languageMenu, setLanguageMenu] = useState(false);
@@ -79,15 +79,14 @@ export const Dashboard = () => {
     setLoading(false);
   };
 
-  useEffect(() => { void loadDemo(); }, []);
-
   const analyze = async (event: FormEvent) => {
     event.preventDefault();
     if (!/^(?!-)(?!.*--)[a-zA-Z0-9-]{1,39}(?<!-)$/.test(username.trim())) { setError(t.errors.invalid); return; }
     setLoading(true);
     setError("");
+    setAnalysis(null);
     try {
-      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username }) });
+      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: username.trim() }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       setAnalysis(result);

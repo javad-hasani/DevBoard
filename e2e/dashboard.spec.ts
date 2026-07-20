@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("loads demo dashboard and switches language", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "مشاهده دمو" }).click();
   await expect(page.getByText("نمای مهندسی")).toBeVisible();
   await page.getByLabel("Language").click();
   await page.getByRole("menuitem", { name: /English/ }).click();

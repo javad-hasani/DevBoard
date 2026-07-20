@@ -31,7 +31,7 @@ DevBoard analyzes a public GitHub profile without requiring registration. It com
 - Persian and English interface with automatic RTL support
 - Light and dark themes across desktop and mobile
 - One-click PDF and Excel report export
-- Built-in demo data when the GitHub API is unavailable
+- Explicit demo mode that never replaces failed live GitHub requests
 - Input validation, rate-friendly caching and optional authenticated API access
 
 ## Architecture

@@ -1,18 +1,27 @@
 import type { Analysis, LanguageShare, Repository } from "@/domain/github";
 import { buildSuggestions, calculateQuality } from "@/domain/scoring";
-import { GitHubClient, type GitHubEvent, type GitHubRepo } from "@/infrastructure/github-client";
+import { GitHubApiError, GitHubClient, type GitHubEvent, type GitHubRepo } from "@/infrastructure/github-client";
 
 const languageColors: Record<string, string> = { TypeScript: "#7c6cff", JavaScript: "#f3c84b", Python: "#4f8dcc", Go: "#43c6db", Rust: "#e69766", Java: "#ee6b64", Shell: "#62d393" };
 
 export class AnalyzeProfile {
   constructor(private readonly github = new GitHubClient()) {}
 
+  private async emptySafe<T>(request: Promise<T>, fallback: T) {
+    try {
+      return await request;
+    } catch (error) {
+      if (error instanceof GitHubApiError && (error.status === 404 || error.status === 409)) return fallback;
+      throw error;
+    }
+  }
+
   private async inspectRepo(owner: string, repo: GitHubRepo): Promise<Repository> {
     const root = `/repos/${owner}/${repo.name}`;
     const [tree, commits, pullRequests] = await Promise.all([
-      this.github.tree(owner, repo.name, repo.default_branch),
-      this.github.count(`${root}/commits?sha=${repo.default_branch}`),
-      this.github.count(`${root}/pulls?state=all`),
+      this.emptySafe(this.github.tree(owner, repo.name, repo.default_branch), { tree: [] }),
+      this.emptySafe(this.github.count(`${root}/commits?sha=${encodeURIComponent(repo.default_branch)}`), 0),
+      this.emptySafe(this.github.count(`${root}/pulls?state=all`), 0),
     ]);
     const paths = tree.tree.map((item) => item.path.toLowerCase());
     const hasReadme = paths.some((path) => /^readme(?:\.|$)/.test(path));
@@ -38,8 +47,13 @@ export class AnalyzeProfile {
   }
 
   async execute(username: string): Promise<Analysis> {
-    const [user, rawRepos, events] = await Promise.all([this.github.user(username), this.github.repositories(username), this.github.events(username)]);
-    const repositories = await Promise.all(rawRepos.filter((repo) => !repo.fork).slice(0, 12).map((repo) => this.inspectRepo(username, repo)));
+    const [user, rawRepos] = await Promise.all([this.github.user(username), this.github.repositories(username)]);
+    const events = await this.github.events(username).catch(() => [] as GitHubEvent[]);
+    const candidates = rawRepos.filter((repo) => !repo.fork).slice(0, 12);
+    const repositories: Repository[] = [];
+    for (let index = 0; index < candidates.length; index += 3) {
+      repositories.push(...await Promise.all(candidates.slice(index, index + 3).map((repo) => this.inspectRepo(user.login, repo))));
+    }
     const languageCounts = repositories.reduce<Record<string, number>>((acc, repo) => ({ ...acc, [repo.language]: (acc[repo.language] ?? 0) + 1 }), {});
     const languages: LanguageShare[] = Object.entries(languageCounts).map(([name, value]) => ({ name, value: Math.round((value / Math.max(repositories.length, 1)) * 100), color: languageColors[name] ?? "#94a3b8" }));
     const eventTotals = events.reduce<Record<string, { commits: number; contributions: number }>>((acc, event: GitHubEvent) => {

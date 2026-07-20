@@ -3,6 +3,12 @@ type GitHubRepo = { id: number; name: string; description: string | null; html_u
 type GitHubTree = { tree: Array<{ path: string; type: "blob" | "tree" }> };
 type GitHubEvent = { type: string; created_at: string; payload: { commits?: unknown[]; pull_request?: unknown } };
 
+export class GitHubApiError extends Error {
+  constructor(public readonly status: number, public readonly retryAfter?: string) {
+    super(status === 404 ? "NOT_FOUND" : status === 403 || status === 429 ? "RATE_LIMITED" : `GITHUB_${status}`);
+  }
+}
+
 export class GitHubClient {
   private readonly baseUrl = "https://api.github.com";
   private readonly headers: HeadersInit;
@@ -13,7 +19,11 @@ export class GitHubClient {
 
   private async response(path: string) {
     const response = await fetch(`${this.baseUrl}${path}`, { headers: this.headers, next: { revalidate: 300 } });
-    if (!response.ok) throw new Error(response.status === 404 ? "NOT_FOUND" : `GITHUB_${response.status}`);
+    if (!response.ok) {
+      const reset = response.headers.get("x-ratelimit-reset");
+      const retryAfter = response.headers.get("retry-after") ?? (reset ? String(Math.max(Number(reset) - Math.floor(Date.now() / 1000), 1)) : undefined);
+      throw new GitHubApiError(response.status, retryAfter);
+    }
     return response;
   }
 
@@ -23,15 +33,15 @@ export class GitHubClient {
   }
 
   user(username: string) {
-    return this.request<GitHubUser>(`/users/${username}`);
+    return this.request<GitHubUser>(`/users/${encodeURIComponent(username)}`);
   }
 
   repositories(username: string) {
-    return this.request<GitHubRepo[]>(`/users/${username}/repos?per_page=100&sort=updated`);
+    return this.request<GitHubRepo[]>(`/users/${encodeURIComponent(username)}/repos?per_page=100&sort=updated`);
   }
 
   events(username: string) {
-    return this.request<GitHubEvent[]>(`/users/${username}/events/public?per_page=100`);
+    return this.request<GitHubEvent[]>(`/users/${encodeURIComponent(username)}/events/public?per_page=100`);
   }
 
   tree(owner: string, repository: string, branch: string) {
