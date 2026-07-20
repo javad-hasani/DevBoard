@@ -1,6 +1,6 @@
 import type { Analysis, LanguageShare, Repository } from "@/domain/github";
 import { buildSuggestions, calculateQuality } from "@/domain/scoring";
-import { GitHubClient, type GitHubRepo } from "@/infrastructure/github-client";
+import { GitHubClient, type GitHubEvent, type GitHubRepo } from "@/infrastructure/github-client";
 
 const languageColors: Record<string, string> = { TypeScript: "#7c6cff", JavaScript: "#f3c84b", Python: "#4f8dcc", Go: "#43c6db", Rust: "#e69766", Java: "#ee6b64", Shell: "#62d393" };
 
@@ -9,14 +9,16 @@ export class AnalyzeProfile {
 
   private async inspectRepo(owner: string, repo: GitHubRepo): Promise<Repository> {
     const root = `/repos/${owner}/${repo.name}`;
-    const [hasReadme, hasTests, hasLicense, hasActions, commits, pullRequests] = await Promise.all([
-      this.github.exists(`${root}/readme`),
-      Promise.all(["test", "tests", "__tests__", "src/__tests__"].map((path) => this.github.exists(`${root}/contents/${path}`))).then((results) => results.some(Boolean)),
-      this.github.exists(`${root}/license`),
-      this.github.exists(`${root}/contents/.github/workflows`),
+    const [tree, commits, pullRequests] = await Promise.all([
+      this.github.tree(owner, repo.name, repo.default_branch),
       this.github.count(`${root}/commits?sha=${repo.default_branch}`),
       this.github.count(`${root}/pulls?state=all`),
     ]);
+    const paths = tree.tree.map((item) => item.path.toLowerCase());
+    const hasReadme = paths.some((path) => /^readme(?:\.|$)/.test(path));
+    const hasTests = paths.some((path) => /(^|\/)(__tests__|tests?|spec)(\/|\.|$)/.test(path));
+    const hasLicense = paths.some((path) => /^licen[cs]e(?:\.|$)/.test(path));
+    const hasActions = paths.some((path) => path.startsWith(".github/workflows/") && /\.ya?ml$/.test(path));
     const input = { hasReadme, hasTests, hasLicense, hasActions, updatedAt: repo.updated_at };
     return {
       id: repo.id,
@@ -36,11 +38,20 @@ export class AnalyzeProfile {
   }
 
   async execute(username: string): Promise<Analysis> {
-    const [user, rawRepos] = await Promise.all([this.github.user(username), this.github.repositories(username)]);
+    const [user, rawRepos, events] = await Promise.all([this.github.user(username), this.github.repositories(username), this.github.events(username)]);
     const repositories = await Promise.all(rawRepos.filter((repo) => !repo.fork).slice(0, 12).map((repo) => this.inspectRepo(username, repo)));
     const languageCounts = repositories.reduce<Record<string, number>>((acc, repo) => ({ ...acc, [repo.language]: (acc[repo.language] ?? 0) + 1 }), {});
     const languages: LanguageShare[] = Object.entries(languageCounts).map(([name, value]) => ({ name, value: Math.round((value / Math.max(repositories.length, 1)) * 100), color: languageColors[name] ?? "#94a3b8" }));
-    const activity = Array.from({ length: 14 }, (_, index) => ({ date: new Date(Date.now() - (13 - index) * 86400000).toISOString().slice(0, 10), commits: index % 4, contributions: (index * 3) % 9 }));
+    const eventTotals = events.reduce<Record<string, { commits: number; contributions: number }>>((acc, event: GitHubEvent) => {
+      const date = event.created_at.slice(0, 10);
+      const current = acc[date] ?? { commits: 0, contributions: 0 };
+      const commits = event.type === "PushEvent" ? event.payload.commits?.length ?? 0 : 0;
+      return { ...acc, [date]: { commits: current.commits + commits, contributions: current.contributions + 1 } };
+    }, {});
+    const activity = Array.from({ length: 14 }, (_, index) => {
+      const date = new Date(Date.now() - (13 - index) * 86400000).toISOString().slice(0, 10);
+      return { date, commits: eventTotals[date]?.commits ?? 0, contributions: eventTotals[date]?.contributions ?? 0 };
+    });
     return {
       profile: {
         login: user.login,
